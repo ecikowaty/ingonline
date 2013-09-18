@@ -1,0 +1,12 @@
+#ifndef INGONLINE_GLOBAL_HPP
+#define INGONLINE_GLOBAL_HPP
+
+#include <QtCore/qglobal.h>
+
+#if defined(INGONLINE_LIBRARY)
+#  define INGONLINESHARED_EXPORT Q_DECL_EXPORT
+#else
+#  define INGONLINESHARED_EXPORT Q_DECL_IMPORT
+#endif
+
+#endif // INGONLINE_GLOBAL_HPP
