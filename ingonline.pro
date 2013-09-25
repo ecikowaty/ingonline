@@ -4,12 +4,14 @@
 #
 #-------------------------------------------------
 
-QT       += network
+QT       += network webkitwidgets xml
 
 QT       -= gui
 
 TARGET = ingonline
 TEMPLATE = lib
+
+CONFIG += c++11
 
 DEFINES += INGONLINE_LIBRARY
 

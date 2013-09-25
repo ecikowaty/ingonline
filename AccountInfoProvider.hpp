@@ -7,30 +7,45 @@
 #include <QtNetwork/QNetworkReply>
 #include "ingonline_global.hpp"
 
+class QStateMachine;
+
 namespace ingonline
 {
+	enum LoginState
+	{
+		ENTERING_LOGIN,
+		LOGIN_ENTRED,
+		PASSWORD_ENTRED,
+		LOGIN_SUCCESSFULL,
+		LOGIN_UNSUCCESSFULL,
+		BALANCE_CHECK,
+		BALANCE_UPDATED
+	};
 
 	class INGONLINESHARED_EXPORT AccountInfoProvider: public QObject
 	{
 		Q_OBJECT
 
 	public:
-		typedef QScopedPointer<AccountInfoProvider> Ptr;
-
-		AccountInfoProvider();
-
-		void login(const QString& username);
-		void password(const QString& password);
+		void login(const QString& username, const QString& password);
+		double getBalance();
 
 	public slots:
-		void readReply(QNetworkReply* reply);
-		void handleError(QNetworkReply::NetworkError error);
+		void onHttpReply(QNetworkReply* reply);
+		void onHttpError(QNetworkReply::NetworkError error);
 
 	signals:
+		void balanceDataUpdated(const QStringList& data);
+		void loginSuccessfull();
+		void loginUnsuccessfull();
 		void dataReceived(const QString& data);
+		void passwordReady(const QString& data);
 
 	private:
-		QNetworkAccessManager networkManager;
+		QNetworkAccessManager	networkManager;
+		LoginState				state = ENTERING_LOGIN;
+
+		QString					password;
 	};
 
 }

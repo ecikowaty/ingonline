@@ -1,7 +1,17 @@
+#include <QRegExp>
+#include <QMessageAuthenticationCode>
 #include <QtNetwork/QNetworkCookie>
 #include <QtNetwork/QNetworkCookieJar>
 #include <QUrlQuery>
 #include <QDebug>
+#include <QWebView>
+#include <QWebFrame>
+#include <QWebSettings>
+#include <QFile>
+#include <QtXml/QDomDocument>
+#include <QtXml/QDomNode>
+#include <QtXml/QDomNodeList>
+
 #include "AccountInfoProvider.hpp"
 
 namespace ingonline
@@ -9,18 +19,74 @@ namespace ingonline
 
 	namespace
 	{
-		bool passSet = false;
+		const QString BALANCE_PAGE = "https://online.ingbank.pl/mobi/account/accountInfo.html?new=true";
+
 		const QByteArray COOKIE_CONTENT = "rc=2; IBLogin=krzpot2039; Expires=Thu, 01 Dec 1994 16:00:00 GMT; __gfp_64b=UvlgYl.2PeoAU_pYQd_3tXKHxx4cbKS.HxSQwH7PlpT.77; __utma=254365776.390859550.1349794927.1372155659.1373980249.127; __utmc=254365776; __utmz=254365776.1349794927.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); LtpaToken2=mbxz//dgFj17s6enAvxrNQhzJGOC7lgk5XMl11WMwfATCsAgcP5EVjGPcUJOVPEZuQVBdGEl5MDkHm31QnDhqvzTbf+YlzxvM00CjgdMTmOKZhtayrgA6Y+moy/W7zzjAcoultLvfkRzEzKbTiKZSNYLTHkhAWYyajJTfSWnWy9QzO1213vu016uKEDby1w+HJDh0i6Unyqm5XUp5yuqKjfoD1RNWm3r8lsIBPFbRETGR7fPi3GZxVuKQ+uYVdNx46FqcyFe0uKQok9qzk+wy8fM1PZWu5QcWUvqYnISH1WppEEWQTGRhqhCEVjtIF2X3rXSy1+g/WeocnJCBnJecttH5CblqGloqPrH7CLSo1hboAiD6EEiP8ASi552T9cOzULaMC1z+9BV4eYO7e8uhjAHbunbJXB5qxmceImBPBICT+IEBWXS4OSpodZLcqx7tMN/A8tR+9TAF/QqyVRi+8LVxPHRQOE+zL8+/NtcSxn0XofGgPAuym24peaQixNKrPStZH9zapcTYAGyammMp9bVnvslXSBTeKSnRttKYxpDzlXEStyQVBUZGXZ+M1Fkt2Nbyqk7ZwRBAvmu/oLmpg==; JSESSIONID=00009XxhjxLOYCZv951BTC4i-Wv:roz_lx11ci_wolf6";
+
+		QString findHmacKey(const QString& httpReply)
+		{
+			QRegExp hmacFunctionInvocation("hex_hmac_sha1\\(\"[0-9]{3,}");
+
+			if (hmacFunctionInvocation.indexIn(httpReply) != -1)
+			{
+				QRegExp keyValue("[0-9]{3,}");
+				if (keyValue.indexIn(hmacFunctionInvocation.cap(0)) != -1)
+				{
+					return keyValue.cap(0);
+				}
+			}
+
+			return "";
+		}
+
+		QString generatePasswordChars(const QString& httpReply)
+		{
+			QString passwordChars;
+			QRegExp passwordCharsInput("passwordChars\\[[0-9][0-9]?\\] = \".\";");
+
+			int pos = 0;
+			while ((pos = passwordCharsInput.indexIn(httpReply, pos)) != -1)
+			{
+				pos += passwordCharsInput.matchedLength();
+
+				QString value = passwordCharsInput.cap(0);
+				passwordChars.append(value.at(value.size() - 3));
+			}
+
+			return passwordChars;
+		}
+
+		QVector<int> findRequestedLetters(const QString& httpReply)
+		{
+			QDomDocument html;
+			html.setContent(httpReply);
+			QDomNodeList inputNodes = html.documentElement().elementsByTagName("input");
+
+			QRegExp letterId("[0-9]+");
+			QVector<int> challenge;
+			for (int i = 0; i < inputNodes.size(); ++i)
+			{
+				const QString attributeName = inputNodes.at(i).toElement().attribute("name");
+				if (attributeName.contains("passwd"))
+				{
+					letterId.indexIn(attributeName);
+					challenge.append(letterId.cap().toInt());
+				}
+			}
+
+			return challenge;
+		}
 	}
 
-	AccountInfoProvider::AccountInfoProvider()
-	{
-	}
 
-	void AccountInfoProvider::login(const QString& username)
+	void AccountInfoProvider::login(const QString& username, const QString& password)
 	{
+		qDebug() << "logging in";
+
+		this->password = password;
+
 		networkManager.setCookieJar(new QNetworkCookieJar(&networkManager));
-		connect(&networkManager, SIGNAL(finished(QNetworkReply*)), this, SLOT(readReply(QNetworkReply*)));
+		connect(&networkManager, SIGNAL(finished(QNetworkReply*)), this, SLOT(onHttpReply(QNetworkReply*)));
 
 		QNetworkRequest request;
 		request.setUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
@@ -30,30 +96,29 @@ namespace ingonline
 		QUrlQuery login;
 		login.addQueryItem("cmd", "passMask");
 		login.addQueryItem("login", username);
-//		login.addQueryItem("action:login", "");
+		login.addQueryItem("action:login", "");
 
 		networkManager.post(request, login.query(QUrl::FullyEncoded).toUtf8());
+
+		state = LOGIN_ENTRED;
 	}
 
-	void AccountInfoProvider::password(const QString& password)
+	double AccountInfoProvider::getBalance()
 	{
-		qDebug() << "settings password:" << password;
-
 		QList<QNetworkCookie> cookies = networkManager.cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
+
 		QVariant var;
 		var.setValue(cookies);
 
 		QNetworkRequest request;
-		request.setUrl(QUrl("https://online.ingbank.pl/mobi/login.html#"));
+		request.setUrl(QUrl(BALANCE_PAGE));
 		request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
-		request.setHeader(QNetworkRequest::CookieHeader, var);
 
-		QUrlQuery login;
-
-		networkManager.post(request, login.query(QUrl::FullyEncoded).toUtf8());
+		state = BALANCE_CHECK;
+		networkManager.get(request);
 	}
 
-	void AccountInfoProvider::readReply(QNetworkReply *reply)
+	void AccountInfoProvider::onHttpReply(QNetworkReply *reply)
 	{
 		if(reply->error() != QNetworkReply::NoError)
 		{
@@ -61,17 +126,102 @@ namespace ingonline
 			return;
 		}
 
-		if (!passSet)
+		if (state == LOGIN_ENTRED)
 		{
-			passSet = true;
+			QString httpReplyContent(reply->readAll());
+			emit dataReceived(httpReplyContent);
+
+			QString hmacKey = findHmacKey(httpReplyContent);
+			QString passwordChars = generatePasswordChars(httpReplyContent);
+			QVector<int>&& passwordChallenge = findRequestedLetters(httpReplyContent);
+
+			qDebug() << "hmac key:" << hmacKey;
+			qDebug() << "password chars:" << passwordChars;
+			qDebug() << "password challenge:" << passwordChallenge;
+
+			QList<QNetworkCookie> cookies = networkManager.cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
+
+			QVariant var;
+			var.setValue(cookies);
+
+			QNetworkRequest request;
+			request.setUrl(QUrl("https://online.ingbank.pl/mobi/j_security_check"));
+			request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
+			request.setHeader(QNetworkRequest::CookieHeader, var);
+
+			for (int requestedLetter : passwordChallenge)
+			{
+				passwordChars[requestedLetter] = password[requestedLetter];
+			}
+
+			QFile sha1Javascript("./sha1.html");
+			if (sha1Javascript.open(QIODevice::ReadOnly))
+			{
+				QWebSettings::globalSettings()->setAttribute(QWebSettings::DeveloperExtrasEnabled, true);
+				QWebView webView;
+				webView.setHtml(sha1Javascript.readAll());
+
+				QString hmacFormat("hex_hmac_sha1('%1', '%2');");
+				QVariant result = webView.page()->mainFrame()->evaluateJavaScript(hmacFormat.arg(hmacKey, passwordChars));
+				qDebug() << "hmac value:" << result.toString();
+
+				QUrlQuery login;
+				login.addQueryItem("j_username", "krzpot2039");
+				login.addQueryItem("j_password1", "e36e1a6b89a6cbfb851d85e78c5527457ce7d024");
+				login.addQueryItem("j_password2", result.toString());
+				login.addQueryItem("j_password3", "8fb79f14a041123f99f3954da128202d7c8c8b0a");
+
+				networkManager.post(request, login.query(QUrl::FullyEncoded).toUtf8());
+			}
+
+			state = PASSWORD_ENTRED;
 		}
+		else if (state == PASSWORD_ENTRED)
+		{
+			qDebug() << "location:" << reply->rawHeader("Location");
 
-		emit dataReceived(QString(reply->readAll()));
+			if (!reply->rawHeader("Location").contains("err"))
+			{
+				state = LOGIN_SUCCESSFULL;
 
-		qDebug() << "Got reply"/* << reply->readAll()*/;
+				qDebug() << "login successfull";
+				emit loginSuccessfull();
+			}
+			else
+			{
+				qCritical() << "login error";
+				state = LOGIN_UNSUCCESSFULL;
+
+				emit loginUnsuccessfull();
+
+				// todo: emit signal
+			}
+		}
+		else if (state == BALANCE_CHECK)
+		{
+			qDebug() << "onBalanceCheck";
+
+			QDomDocument html;
+			html.setContent(reply->readAll());
+
+			QStringList accountsBalance;
+			QDomNodeList optionNodes = html.documentElement().elementsByTagName("option");
+			for (int i = 0; i < optionNodes.size(); ++i)
+			{
+				const QString balanceValue = optionNodes.at(i).toElement().firstChild().nodeValue();
+
+				if (!balanceValue.contains("Stara"))
+				{
+					accountsBalance << balanceValue.split("; ");
+				}
+			}
+
+			state = BALANCE_UPDATED;
+			emit balanceDataUpdated(accountsBalance);
+		}
 	}
 
-	void AccountInfoProvider::handleError(QNetworkReply::NetworkError error)
+	void AccountInfoProvider::onHttpError(QNetworkReply::NetworkError error)
 	{
 		qCritical() << "network error:" << error;
 	}
