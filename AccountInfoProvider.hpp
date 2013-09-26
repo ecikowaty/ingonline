@@ -5,6 +5,7 @@
 #include <QScopedPointer>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
+#include <QScopedPointer>
 #include "ingonline_global.hpp"
 
 class QStateMachine;
@@ -27,8 +28,11 @@ namespace ingonline
 		Q_OBJECT
 
 	public:
+		typedef QScopedPointer<AccountInfoProvider> Ptr;
+
 		void login(const QString& username, const QString& password);
-		double getBalance();
+		void logout();
+		void getBalance();
 
 	public slots:
 		void onHttpReply(QNetworkReply* reply);
@@ -42,10 +46,10 @@ namespace ingonline
 		void passwordReady(const QString& data);
 
 	private:
-		QNetworkAccessManager	networkManager;
-		LoginState				state = ENTERING_LOGIN;
+		QScopedPointer<QNetworkAccessManager>	networkManager;
 
-		QString					password;
+		LoginState	state = ENTERING_LOGIN;
+		QString		password;
 	};
 
 }

@@ -85,8 +85,9 @@ namespace ingonline
 
 		this->password = password;
 
-		networkManager.setCookieJar(new QNetworkCookieJar(&networkManager));
-		connect(&networkManager, SIGNAL(finished(QNetworkReply*)), this, SLOT(onHttpReply(QNetworkReply*)));
+		networkManager.reset(new QNetworkAccessManager);
+		networkManager->setCookieJar(new QNetworkCookieJar(networkManager.data()));
+		connect(networkManager.data(), SIGNAL(finished(QNetworkReply*)), this, SLOT(onHttpReply(QNetworkReply*)));
 
 		QNetworkRequest request;
 		request.setUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
@@ -98,14 +99,14 @@ namespace ingonline
 		login.addQueryItem("login", username);
 		login.addQueryItem("action:login", "");
 
-		networkManager.post(request, login.query(QUrl::FullyEncoded).toUtf8());
+		networkManager->post(request, login.query(QUrl::FullyEncoded).toUtf8());
 
 		state = LOGIN_ENTRED;
 	}
 
-	double AccountInfoProvider::getBalance()
+	void AccountInfoProvider::getBalance()
 	{
-		QList<QNetworkCookie> cookies = networkManager.cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
+		QList<QNetworkCookie> cookies = networkManager->cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
 
 		QVariant var;
 		var.setValue(cookies);
@@ -115,7 +116,7 @@ namespace ingonline
 		request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
 
 		state = BALANCE_CHECK;
-		networkManager.get(request);
+		networkManager->get(request);
 	}
 
 	void AccountInfoProvider::onHttpReply(QNetworkReply *reply)
@@ -139,7 +140,7 @@ namespace ingonline
 			qDebug() << "password chars:" << passwordChars;
 			qDebug() << "password challenge:" << passwordChallenge;
 
-			QList<QNetworkCookie> cookies = networkManager.cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
+			QList<QNetworkCookie> cookies = networkManager->cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
 
 			QVariant var;
 			var.setValue(cookies);
@@ -171,7 +172,7 @@ namespace ingonline
 				login.addQueryItem("j_password2", result.toString());
 				login.addQueryItem("j_password3", "8fb79f14a041123f99f3954da128202d7c8c8b0a");
 
-				networkManager.post(request, login.query(QUrl::FullyEncoded).toUtf8());
+				networkManager->post(request, login.query(QUrl::FullyEncoded).toUtf8());
 			}
 
 			state = PASSWORD_ENTRED;
