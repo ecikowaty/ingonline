@@ -1,6 +1,7 @@
 #ifndef ACCOUNTINFOPROVIDER_HPP
 #define ACCOUNTINFOPROVIDER_HPP
 
+#include <QVariant>
 #include <QObject>
 #include <QScopedPointer>
 #include <QtNetwork/QNetworkAccessManager>
@@ -20,7 +21,10 @@ namespace ingonline
 		LOGIN_SUCCESSFULL,
 		LOGIN_UNSUCCESSFULL,
 		BALANCE_CHECK,
-		BALANCE_UPDATED
+		HISTORY_REQUESTED,
+		AWAITING_HISTORY_PAGE,
+		READ_ERROR,
+		IDLE
 	};
 
 	class INGONLINESHARED_EXPORT AccountInfoProvider: public QObject
@@ -32,24 +36,32 @@ namespace ingonline
 
 		void login(const QString& username, const QString& password);
 		void logout();
-		void getBalance();
 
 	public slots:
+		void getBalance();
+		void getHistory();
 		void onHttpReply(QNetworkReply* reply);
 		void onHttpError(QNetworkReply::NetworkError error);
 
 	signals:
 		void balanceDataUpdated(const QStringList& data);
+		void historyDataReceived(const QStringList& data);
 		void loginSuccessfull();
 		void loginUnsuccessfull();
 		void dataReceived(const QString& data);
 		void passwordReady(const QString& data);
 
+		void unexpectedError(const QString& message);
+		void progressUpdate(const QString& info);
+
 	private:
 		QScopedPointer<QNetworkAccessManager>	networkManager;
 
 		LoginState	state = ENTERING_LOGIN;
+		QString		username;
 		QString		password;
+
+		QVariant	cookie;
 	};
 
 }

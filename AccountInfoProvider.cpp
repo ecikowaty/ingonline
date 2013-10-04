@@ -3,13 +3,15 @@
 #include <QtNetwork/QNetworkCookie>
 #include <QtNetwork/QNetworkCookieJar>
 #include <QUrlQuery>
+#include <QApplication>
 #include <QDebug>
 #include <QWebView>
 #include <QWebFrame>
 #include <QWebSettings>
 #include <QFile>
+#include <QTextStream>
+#include <QXmlStreamReader>
 #include <QtXml/QDomDocument>
-#include <QtXml/QDomNode>
 #include <QtXml/QDomNodeList>
 
 #include "AccountInfoProvider.hpp"
@@ -19,7 +21,11 @@ namespace ingonline
 
 	namespace
 	{
+		const QString ACCOUNT_NUMBER = "82105015591000009041544249";
+
 		const QString BALANCE_PAGE = "https://online.ingbank.pl/mobi/account/accountInfo.html?new=true";
+
+		const QString HISTORY_PAGE = "https://online.ingbank.pl/mobi/account/transhistory.html?new=true";
 
 		const QByteArray COOKIE_CONTENT = "rc=2; IBLogin=krzpot2039; Expires=Thu, 01 Dec 1994 16:00:00 GMT; __gfp_64b=UvlgYl.2PeoAU_pYQd_3tXKHxx4cbKS.HxSQwH7PlpT.77; __utma=254365776.390859550.1349794927.1372155659.1373980249.127; __utmc=254365776; __utmz=254365776.1349794927.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); LtpaToken2=mbxz//dgFj17s6enAvxrNQhzJGOC7lgk5XMl11WMwfATCsAgcP5EVjGPcUJOVPEZuQVBdGEl5MDkHm31QnDhqvzTbf+YlzxvM00CjgdMTmOKZhtayrgA6Y+moy/W7zzjAcoultLvfkRzEzKbTiKZSNYLTHkhAWYyajJTfSWnWy9QzO1213vu016uKEDby1w+HJDh0i6Unyqm5XUp5yuqKjfoD1RNWm3r8lsIBPFbRETGR7fPi3GZxVuKQ+uYVdNx46FqcyFe0uKQok9qzk+wy8fM1PZWu5QcWUvqYnISH1WppEEWQTGRhqhCEVjtIF2X3rXSy1+g/WeocnJCBnJecttH5CblqGloqPrH7CLSo1hboAiD6EEiP8ASi552T9cOzULaMC1z+9BV4eYO7e8uhjAHbunbJXB5qxmceImBPBICT+IEBWXS4OSpodZLcqx7tMN/A8tR+9TAF/QqyVRi+8LVxPHRQOE+zL8+/NtcSxn0XofGgPAuym24peaQixNKrPStZH9zapcTYAGyammMp9bVnvslXSBTeKSnRttKYxpDzlXEStyQVBUZGXZ+M1Fkt2Nbyqk7ZwRBAvmu/oLmpg==; JSESSIONID=00009XxhjxLOYCZv951BTC4i-Wv:roz_lx11ci_wolf6";
 
@@ -82,7 +88,9 @@ namespace ingonline
 	void AccountInfoProvider::login(const QString& username, const QString& password)
 	{
 		qDebug() << "logging in";
+		emit progressUpdate("Logging in");
 
+		this->username = username;
 		this->password = password;
 
 		networkManager.reset(new QNetworkAccessManager);
@@ -106,21 +114,42 @@ namespace ingonline
 
 	void AccountInfoProvider::getBalance()
 	{
-		QList<QNetworkCookie> cookies = networkManager->cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
-
-		QVariant var;
-		var.setValue(cookies);
+		emit progressUpdate("Sending balance request");
 
 		QNetworkRequest request;
 		request.setUrl(QUrl(BALANCE_PAGE));
 		request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
+		request.setHeader(QNetworkRequest::CookieHeader, cookie);
 
 		state = BALANCE_CHECK;
 		networkManager->get(request);
 	}
 
+	void AccountInfoProvider::getHistory()
+	{
+		emit progressUpdate("Downloading account history");
+
+		QNetworkRequest request;
+		request.setUrl(QUrl(HISTORY_PAGE));
+		request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
+		request.setHeader(QNetworkRequest::CookieHeader, cookie);
+
+		QUrlQuery postData;
+		postData.addQueryItem("account", ACCOUNT_NUMBER);
+		postData.addQueryItem("accountValue", "KONTO Direct; 0,00 PLN");
+		postData.addQueryItem("step", "next");
+		postData.addQueryItem("action:transhistory", "");
+		postData.addQueryItem("form", "true");
+
+		state = HISTORY_REQUESTED;
+		networkManager->post(request, postData.query(QUrl::FullyEncoded).toUtf8());
+	}
+
 	void AccountInfoProvider::onHttpReply(QNetworkReply *reply)
 	{
+		qDebug() << "got reply" << reply->bytesAvailable();
+		cookie = reply->header(QNetworkRequest::CookieHeader);
+
 		if(reply->error() != QNetworkReply::NoError)
 		{
 			qCritical() << tr("Error while downloading information!\n%1").arg(reply->errorString());
@@ -140,22 +169,17 @@ namespace ingonline
 			qDebug() << "password chars:" << passwordChars;
 			qDebug() << "password challenge:" << passwordChallenge;
 
-			QList<QNetworkCookie> cookies = networkManager->cookieJar()->cookiesForUrl(QUrl("https://online.ingbank.pl/mobi/login.html"));
-
-			QVariant var;
-			var.setValue(cookies);
-
 			QNetworkRequest request;
 			request.setUrl(QUrl("https://online.ingbank.pl/mobi/j_security_check"));
 			request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
-			request.setHeader(QNetworkRequest::CookieHeader, var);
+			request.setHeader(QNetworkRequest::CookieHeader, cookie);
 
 			for (int requestedLetter : passwordChallenge)
 			{
 				passwordChars[requestedLetter] = password[requestedLetter];
 			}
 
-			QFile sha1Javascript("./sha1.html");
+			QFile sha1Javascript(QApplication::applicationDirPath() + "/sha1.html");
 			if (sha1Javascript.open(QIODevice::ReadOnly))
 			{
 				QWebSettings::globalSettings()->setAttribute(QWebSettings::DeveloperExtrasEnabled, true);
@@ -167,7 +191,7 @@ namespace ingonline
 				qDebug() << "hmac value:" << result.toString();
 
 				QUrlQuery login;
-				login.addQueryItem("j_username", "krzpot2039");
+				login.addQueryItem("j_username", username);
 				login.addQueryItem("j_password1", "e36e1a6b89a6cbfb851d85e78c5527457ce7d024");
 				login.addQueryItem("j_password2", result.toString());
 				login.addQueryItem("j_password3", "8fb79f14a041123f99f3954da128202d7c8c8b0a");
@@ -186,21 +210,22 @@ namespace ingonline
 				state = LOGIN_SUCCESSFULL;
 
 				qDebug() << "login successfull";
+
 				emit loginSuccessfull();
+				emit progressUpdate("Login successfull");
 			}
 			else
 			{
 				qCritical() << "login error";
 				state = LOGIN_UNSUCCESSFULL;
 
-				emit loginUnsuccessfull();
-
-				// todo: emit signal
+				emit progressUpdate("Login unsuccessfull");
 			}
 		}
 		else if (state == BALANCE_CHECK)
 		{
-			qDebug() << "onBalanceCheck";
+			qDebug() << "on balance check";
+			emit progressUpdate("Checking balance");
 
 			QDomDocument html;
 			html.setContent(reply->readAll());
@@ -217,13 +242,86 @@ namespace ingonline
 				}
 			}
 
-			state = BALANCE_UPDATED;
+			state = IDLE;
 			emit balanceDataUpdated(accountsBalance);
+		}
+		else if (state == HISTORY_REQUESTED)
+		{
+			qDebug() << "history requested";
+
+			QNetworkRequest request;
+			request.setUrl(QUrl(reply->rawHeader("Location")));
+			request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
+			request.setHeader(QNetworkRequest::CookieHeader, cookie);
+
+			state = AWAITING_HISTORY_PAGE;
+			networkManager->get(request);
+		}
+		else if (state == AWAITING_HISTORY_PAGE)
+		{
+			emit progressUpdate("Account history downloaded");
+			qDebug() << "history reply received:";
+
+			QString httpReply = reply->readAll();
+
+			httpReply.remove(QRegExp("<[^>]*>"));
+			httpReply.replace(QRegExp("\\s{2,}"), "\n");
+
+			QTextStream text(&httpReply);
+
+			QStringList historyEntries;
+			while (true)
+			{
+
+				QString line = text.readLine();
+				if (line.isNull())
+				{
+					break;
+				}
+
+				if (line == "Data transakcji:")
+				{
+					historyEntries << text.readLine();
+				}
+				else if (line == "Opis:")
+				{
+					historyEntries << text.readLine();
+				}
+				else if (line == "Kwota:")
+				{
+					QString value;
+
+					line = text.readLine();
+					if (line == "-")
+					{
+						value = "-" + text.readLine();
+					}
+					else
+					{
+						value = line;
+					}
+
+					value.replace(",", ".");
+					value.remove(QRegExp("\\s*"));
+
+					historyEntries << value;
+				}
+			}
+
+			if (historyEntries.size() % 3 != 0)
+			{
+				qWarning() << "wrong stringEntries size";
+			}
+
+			emit historyDataReceived(historyEntries);
+
+			qDebug() << "done";
 		}
 	}
 
 	void AccountInfoProvider::onHttpError(QNetworkReply::NetworkError error)
 	{
+		emit progressUpdate("HTTP error");
 		qCritical() << "network error:" << error;
 	}
 
